@@ -1,2 +1,31 @@
+# Environment files
 .env
-.venv
+.venv/
+
+# Google Sheets API credentials (NEVER commit these!)
+credentials.json
+token.json
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output files
+output.txt
+*.log
+
+# Test files with sensitive data
+test_credentials.json

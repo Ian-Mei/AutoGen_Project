@@ -1,6 +1,6 @@
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.ui import Console
-from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.teams import SelectorGroupChat
 from autogen_agentchat.conditions import TextMentionTermination
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 import asyncio
@@ -71,7 +71,7 @@ async def main() -> None:
 
     # Create team with dynamically created agents
     termination = TextMentionTermination("TERMINATE")
-    team = RoundRobinGroupChat(
+    team = SelectorGroupChat(
         [
             agents["user_assistant"],
             agents["event_coordinator"],

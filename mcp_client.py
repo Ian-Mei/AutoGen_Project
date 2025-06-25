@@ -100,7 +100,20 @@ class MCPClient:
 
     def _get_google_sheets_service(self):
         """Initialize Google Sheets API service"""
+        # Try API key first (for public sheets only)
+        api_key = os.getenv("GOOGLE_CLOUD_API_KEY")
+        if api_key:
+            print("🔑 Using Google Cloud API key for public sheets access")
+            service = build("sheets", "v4", developerKey=api_key)
+            return service
+
+        # Fallback to OAuth for private sheets
+        print("🔐 Using OAuth credentials for private sheets access")
+        print(
+            "⚠️  Note: If you get 'access_denied' error, add your email as a test user in Google Cloud Console"
+        )
         creds = None
+
         # The file token.json stores the user's access and refresh tokens.
         if os.path.exists(TOKEN_FILE):
             creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -113,12 +126,29 @@ class MCPClient:
                 if not os.path.exists(CREDENTIALS_FILE):
                     raise FileNotFoundError(
                         f"Google Sheets credentials file '{CREDENTIALS_FILE}' not found. "
-                        "Please download your credentials from Google Cloud Console."
+                        "Please download your credentials from Google Cloud Console or use API key for public sheets only."
                     )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    CREDENTIALS_FILE, SCOPES
-                )
-                creds = flow.run_local_server(port=0)
+                try:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        CREDENTIALS_FILE, SCOPES
+                    )
+                    creds = flow.run_local_server(port=8080)
+                except Exception as e:
+                    if "access_denied" in str(e) or "403" in str(e):
+                        print(
+                            "❌ OAuth access denied. Please add your email as a test user in Google Cloud Console:"
+                        )
+                        print(
+                            "   1. Go to Google Cloud Console → APIs & Services → OAuth consent screen"
+                        )
+                        print("   2. Scroll to 'Test users' section")
+                        print("   3. Add your email address")
+                        print("   4. Try again")
+                        raise Exception(
+                            "OAuth access denied. Add your email as a test user in Google Cloud Console."
+                        )
+                    else:
+                        raise e
 
             # Save the credentials for the next run
             with open(TOKEN_FILE, "w") as token:
@@ -141,8 +171,15 @@ class MCPClient:
             )
             values = result.get("values", [])
             return values
+        except FileNotFoundError as e:
+            print(f"Google Sheets credentials not found: {str(e)}")
+            print("Please run: python setup_google_sheets.py")
+            return []
         except Exception as e:
             print(f"Error reading Google Sheet: {str(e)}")
+            print(
+                "Note: API key only works for public sheets. Private sheets require OAuth credentials."
+            )
             return []
 
     async def get_tools(self, allowed_domains: List[str] = None) -> Dict[str, Any]:

@@ -12,6 +12,13 @@ def setup_google_sheets():
     print("🔧 Google Sheets API Setup Guide")
     print("=" * 40)
 
+    print("\n🚨 SECURITY WARNING:")
+    print("   The credentials.json file contains sensitive data!")
+    print("   - NEVER commit it to version control")
+    print("   - NEVER share it publicly")
+    print("   - Store it securely on your local machine only")
+    print("   - See SECURITY.md for full security guidelines")
+
     print("\n1. Go to the Google Cloud Console:")
     print("   https://console.cloud.google.com/")
 
