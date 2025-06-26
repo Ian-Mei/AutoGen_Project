@@ -19,9 +19,13 @@ FUNDRAISING_PLAN_TOOL = "fundraising.create_plan"
 QUALITY_CHECK_TOOL = "quality.check_deliverable"
 DB_QUERY_TOOL = "db.query"
 FILE_READ_TOOL = "file.read"
+SHEET_SELECTOR_TOOL = "sheets.select_sheet"
 
 # Google Sheets API configuration
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
 
@@ -96,16 +100,33 @@ class MCPClient:
                     "required": ["path"],
                 },
             },
+            SHEET_SELECTOR_TOOL: {
+                "description": "Select a Google Sheets sheet interactively",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "spreadsheet_id": {
+                            "type": "string",
+                            "description": "Google Sheets spreadsheet ID",
+                        },
+                        "range_name": {
+                            "type": "string",
+                            "description": "Range in the sheet to read (e.g., 'Sheet1!A1:D10')",
+                        },
+                    },
+                    "required": ["spreadsheet_id", "range_name"],
+                },
+            },
         }
 
     def _get_google_sheets_service(self):
         """Initialize Google Sheets API service"""
         # Try API key first (for public sheets only)
-        api_key = os.getenv("GOOGLE_CLOUD_API_KEY")
-        if api_key:
-            print("🔑 Using Google Cloud API key for public sheets access")
-            service = build("sheets", "v4", developerKey=api_key)
-            return service
+        # api_key = os.getenv("GOOGLE_CLOUD_API_KEY")
+        # if api_key:
+        #     print("🔑 Using Google Cloud API key for public sheets access")
+        #     service = build("sheets", "v4", developerKey=api_key)
+        #     return service
 
         # Fallback to OAuth for private sheets
         print("🔐 Using OAuth credentials for private sheets access")
@@ -116,25 +137,85 @@ class MCPClient:
 
         # The file token.json stores the user's access and refresh tokens.
         if os.path.exists(TOKEN_FILE):
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            try:
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+                print("✅ Loaded existing credentials from token.json")
+            except Exception as e:
+                print(f"⚠️  Error loading existing credentials: {e}")
+                # Remove invalid token file
+                try:
+                    os.remove(TOKEN_FILE)
+                    print("🗑️  Removed invalid token.json")
+                except:
+                    pass
 
         # If there are no (valid) credentials available, let the user log in.
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                try:
+                    print("🔄 Refreshing expired credentials...")
+                    creds.refresh(Request())
+                    print("✅ Credentials refreshed successfully")
+                except Exception as e:
+                    print(f"❌ Failed to refresh credentials: {e}")
+                    creds = None
             else:
                 if not os.path.exists(CREDENTIALS_FILE):
                     raise FileNotFoundError(
                         f"Google Sheets credentials file '{CREDENTIALS_FILE}' not found. "
-                        "Please download your credentials from Google Cloud Console or use API key for public sheets only."
+                        "Please download your credentials from Google Cloud Console or use API key for public sheets only.\n"
+                        "Run: python setup_google_sheets.py for instructions"
                     )
+
+                print("🔐 Starting OAuth flow...")
                 try:
                     flow = InstalledAppFlow.from_client_secrets_file(
                         CREDENTIALS_FILE, SCOPES
                     )
-                    creds = flow.run_local_server(port=8080)
+
+                    # Try different ports in case 8080 is blocked
+                    ports = [8080]
+                    creds = None
+
+                    for port in ports:
+                        try:
+                            print(f"🌐 Attempting to open browser on port {port}...")
+                            creds = flow.run_local_server(port=port, open_browser=True)
+                            print(f"✅ OAuth successful on port {port}")
+                            break
+                        except OSError as e:
+                            if "Address already in use" in str(e):
+                                print(f"⚠️  Port {port} in use, trying next port...")
+                                continue
+                            else:
+                                raise e
+                        except Exception as e:
+                            if "access_denied" in str(e).lower() or "403" in str(e):
+                                print(
+                                    "❌ OAuth access denied. Please add your email as a test user in Google Cloud Console:"
+                                )
+                                print(
+                                    "   1. Go to Google Cloud Console → APIs & Services → OAuth consent screen"
+                                )
+                                print("   2. Scroll to 'Test users' section")
+                                print("   3. Add your email address")
+                                print("   4. Try again")
+                                raise Exception(
+                                    "OAuth access denied. Add your email as a test user in Google Cloud Console."
+                                )
+                            else:
+                                print(f"❌ OAuth error on port {port}: {e}")
+                                if port == ports[-1]:  # Last port
+                                    raise e
+                                continue
+
+                    if not creds:
+                        raise Exception(
+                            "Failed to complete OAuth flow on any available port"
+                        )
+
                 except Exception as e:
-                    if "access_denied" in str(e) or "403" in str(e):
+                    if "access_denied" in str(e).lower() or "403" in str(e):
                         print(
                             "❌ OAuth access denied. Please add your email as a test user in Google Cloud Console:"
                         )
@@ -148,11 +229,25 @@ class MCPClient:
                             "OAuth access denied. Add your email as a test user in Google Cloud Console."
                         )
                     else:
+                        print(f"❌ OAuth setup failed: {e}")
+                        print("\n🔧 Troubleshooting tips:")
+                        print(
+                            "   1. Make sure you have credentials.json in the current directory"
+                        )
+                        print(
+                            "   2. Check that your firewall isn't blocking the connection"
+                        )
+                        print("   3. Try running as administrator if on Windows")
+                        print("   4. Make sure you're using a supported browser")
                         raise e
 
             # Save the credentials for the next run
-            with open(TOKEN_FILE, "w") as token:
-                token.write(creds.to_json())
+            try:
+                with open(TOKEN_FILE, "w") as token:
+                    token.write(creds.to_json())
+                print("💾 Credentials saved to token.json")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not save credentials: {e}")
 
         service = build("sheets", "v4", credentials=creds)
         return service
@@ -282,6 +377,16 @@ class MCPClient:
 
                 tool_functions[tool_name] = file_read
 
+            elif tool_name == SHEET_SELECTOR_TOOL:
+
+                async def sheets_select_sheet(
+                    spreadsheet_id: str, range_name: str
+                ) -> str:
+                    """Interactive Google Sheets selector and reader"""
+                    return await self.sheets_select_sheet(spreadsheet_id, range_name)
+
+                tool_functions[tool_name] = sheets_select_sheet
+
         return tool_functions
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
@@ -351,6 +456,11 @@ class MCPClient:
                 path = arguments.get("path", "")
                 return f"File System: Read file '{path}' - Content would appear here."
 
+            elif name == SHEET_SELECTOR_TOOL:
+                spreadsheet_id = arguments.get("spreadsheet_id", "")
+                range_name = arguments.get("range_name", "")
+                return await self.sheets_select_sheet(spreadsheet_id, range_name)
+
             else:
                 return f"Unknown tool: {name}"
 
@@ -379,6 +489,231 @@ class MCPClient:
         return await self.call_tool(
             QUALITY_CHECK_TOOL, {"item": item, "category": "general"}
         )
+
+    async def sheets_select_sheet(self, spreadsheet_id: str, range_name: str) -> str:
+        """Interactive Google Sheets selector and reader"""
+        try:
+            # If no spreadsheet_id provided, list all available sheets
+            if not spreadsheet_id:
+                return await self._list_available_sheets()
+
+            # If spreadsheet_id provided but no range, explore the sheet
+            if spreadsheet_id and not range_name:
+                return await self._explore_sheet_structure(spreadsheet_id)
+
+            # If both provided, read the specific data
+            if spreadsheet_id and range_name:
+                return await self._read_sheet_data(spreadsheet_id, range_name)
+
+        except Exception as e:
+            return f"Error in sheet selector: {str(e)}"
+
+    async def _list_available_sheets(self) -> str:
+        """List all available Google Sheets"""
+        try:
+            service, creds = self._get_google_sheets_service_with_creds()
+            if not service or not creds:
+                return "❌ Could not initialize Google Sheets service"
+
+            # Use the Drive API to list all spreadsheets
+            from googleapiclient.discovery import build as build_drive
+
+            drive_service = build_drive("drive", "v3", credentials=creds)
+
+            # Search for all Google Sheets
+            results = (
+                drive_service.files()
+                .list(
+                    q="mimeType='application/vnd.google-apps.spreadsheet'",
+                    pageSize=20,
+                    fields="files(id, name, createdTime, modifiedTime, owners)",
+                )
+                .execute()
+            )
+
+            files = results.get("files", [])
+
+            if not files:
+                return "❌ No Google Sheets found in your account"
+
+            response = f"📋 Found {len(files)} Google Sheets:\n\n"
+
+            for i, file in enumerate(files, 1):
+                response += f"{i:2d}. {file['name']}\n"
+                response += f"    ID: {file['id']}\n"
+                response += (
+                    f"    URL: https://docs.google.com/spreadsheets/d/{file['id']}\n"
+                )
+                response += f"    Modified: {file.get('modifiedTime', 'Unknown')}\n"
+
+                # Show ownership info
+                owners = file.get("owners", [])
+                if owners:
+                    owner_email = owners[0].get("emailAddress", "Unknown")
+                    response += f"    Owner: {owner_email}\n"
+
+                response += "\n"
+
+            response += "💡 To explore a specific sheet, provide its ID and leave range_name empty.\n"
+            response += "💡 To read data, provide both spreadsheet_id and range_name."
+
+            return response
+
+        except Exception as e:
+            return f"❌ Error listing sheets: {str(e)}"
+
+    async def _explore_sheet_structure(self, spreadsheet_id: str) -> str:
+        """Explore a specific sheet's structure"""
+        try:
+            service, _ = self._get_google_sheets_service_with_creds()
+            if not service:
+                return "❌ Could not initialize Google Sheets service"
+
+            # Get sheet metadata
+            sheet = service.spreadsheets()
+            metadata = sheet.get(spreadsheetId=spreadsheet_id).execute()
+
+            sheet_title = metadata.get("properties", {}).get("title", "Unknown")
+            response = f"🔍 Exploring: {sheet_title}\n"
+            response += (
+                f"🌐 URL: https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
+            )
+
+            # List all worksheets
+            worksheets = metadata.get("sheets", [])
+            response += f"📋 Worksheets ({len(worksheets)}):\n\n"
+
+            for i, worksheet in enumerate(worksheets, 1):
+                props = worksheet["properties"]
+                title = props["title"]
+                grid_props = props.get("gridProperties", {})
+                rows = grid_props.get("rowCount", "Unknown")
+                cols = grid_props.get("columnCount", "Unknown")
+
+                response += f"  {i}. {title}\n"
+                response += f"     Size: {rows} rows × {cols} columns\n"
+
+                # Try to read first few rows
+                try:
+                    range_name = f"{title}!A1:Z5"
+                    result = (
+                        sheet.values()
+                        .get(spreadsheetId=spreadsheet_id, range=range_name)
+                        .execute()
+                    )
+
+                    values = result.get("values", [])
+                    if values:
+                        response += f"     Sample data: {len(values)} rows found\n"
+                        if len(values) > 0:
+                            response += f"     Headers: {values[0]}\n"
+                            if len(values) > 1:
+                                response += f"     First row: {values[1]}\n"
+                    else:
+                        response += "     No data found\n"
+
+                except Exception as e:
+                    response += f"     Error reading data: {str(e)}\n"
+
+                response += "\n"
+
+            response += "💡 To read data from a specific worksheet, provide the range_name parameter.\n"
+            response += "💡 Example ranges: 'Sheet1!A1:D10', 'Data!A:A', 'Sheet1' (entire sheet)"
+
+            return response
+
+        except Exception as e:
+            return f"❌ Error exploring sheet: {str(e)}"
+
+    async def _read_sheet_data(self, spreadsheet_id: str, range_name: str) -> str:
+        """Read specific data from a sheet"""
+        try:
+            service, _ = self._get_google_sheets_service_with_creds()
+            if not service:
+                return "❌ Could not initialize Google Sheets service"
+
+            sheet = service.spreadsheets()
+            result = (
+                sheet.values()
+                .get(spreadsheetId=spreadsheet_id, range=range_name)
+                .execute()
+            )
+
+            values = result.get("values", [])
+
+            if not values:
+                return "❌ No data found in the specified range"
+
+            response = f"📊 Retrieved {len(values)} rows of data from {range_name}\n\n"
+
+            # Display the data in a table format
+            for i, row in enumerate(values):
+                if i == 0:
+                    response += "📋 Headers:\n"
+                    response += (
+                        "  "
+                        + " | ".join(f"{j+1:2d}. {cell}" for j, cell in enumerate(row))
+                        + "\n\n"
+                    )
+                    response += "📄 Data:\n"
+                else:
+                    response += (
+                        f"  Row {i:2d}: " + " | ".join(str(cell) for cell in row) + "\n"
+                    )
+
+                # Limit display to first 15 rows
+                if i >= 15:
+                    remaining = len(values) - 16
+                    if remaining > 0:
+                        response += f"  ... and {remaining} more rows\n"
+                    break
+
+            return response
+
+        except Exception as e:
+            return f"❌ Error reading data: {str(e)}"
+
+    def _get_google_sheets_service_with_creds(self):
+        """Get Google Sheets service and credentials"""
+        creds = None
+
+        # Load existing credentials
+        if os.path.exists(TOKEN_FILE):
+            try:
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            except Exception as e:
+                print(f"⚠️  Error loading credentials: {e}")
+                creds = None
+
+        # Refresh or get new credentials
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    print(f"❌ Failed to refresh credentials: {e}")
+                    creds = None
+
+            if not creds:
+                if not os.path.exists(CREDENTIALS_FILE):
+                    raise FileNotFoundError(
+                        f"Google Sheets credentials file '{CREDENTIALS_FILE}' not found."
+                    )
+
+                try:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        CREDENTIALS_FILE, SCOPES
+                    )
+                    creds = flow.run_local_server(port=8080, open_browser=True)
+
+                    # Save credentials
+                    with open(TOKEN_FILE, "w") as token:
+                        token.write(creds.to_json())
+                except Exception as e:
+                    raise e
+
+        service = build("sheets", "v4", credentials=creds)
+        return service, creds
 
 
 # Global MCP client instance
