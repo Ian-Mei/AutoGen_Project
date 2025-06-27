@@ -1,7 +1,7 @@
 # Environment files
 .env
 .venv/
-
+venv/
 # Google Sheets API credentials (NEVER commit these!)
 credentials.json
 token.json
@@ -18,7 +18,8 @@ __pycache__/
 .idea/
 *.swp
 *.swo
-.cursor/
+.cursor/rules
+CLAUDE.md
 # OS files
 .DS_Store
 Thumbs.db

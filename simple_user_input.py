@@ -1,284 +1,341 @@
 #!/usr/bin/env python3
 """
-Simple AutoGen User Input Example
-Basic demonstration of how agents can get user input
+AutoGen User Input with Timeout - Complete Example
+Handles user input, timeouts, and AutoGen integration cleanly
 """
 
 import asyncio
-from typing import Any
+import sys
+import os
+from typing import Optional
+from dotenv import load_dotenv
+
 from autogen_core import CancellationToken
-from autogen_agentchat.agents import UserProxyAgent, AssistantAgent
+from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
+from autogen_agentchat.ui import Console
+from autogen_agentchat.teams import SelectorGroupChat
+from autogen_agentchat.conditions import TextMentionTermination
 from autogen_agentchat.messages import TextMessage
 from autogen_ext.models.openai import OpenAIChatCompletionClient
-import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
 
-async def simple_user_input_example():
-    """Simple example of AutoGen user input"""
-    print("🤖 Simple AutoGen User Input Example")
-    print("=" * 50)
-
-    # Create model client
-    model_client = OpenAIChatCompletionClient(
-        model="gpt-4",
-        api_key=os.getenv("OPENAI_API_KEY"),
-    )
-
-    # Create a simple assistant agent
-    assistant = AssistantAgent(
-        name="assistant",
-        system_message="I'm a helpful assistant. I can ask you questions when I need more information.",
-        model_client=model_client,
-    )
-
-    # Create a user proxy agent with default input function
-    user_proxy = UserProxyAgent(
-        name="user_proxy", description="A human user who can provide input"
-    )
-
-    # Create cancellation token
-    token = CancellationToken()
-
+async def safe_input_with_timeout(prompt: str, timeout: float = 10.0, default: str = "No response") -> str:
+    """
+    Safe input function that handles EOF and timeout gracefully
+    
+    Args:
+        prompt: The prompt to show the user
+        timeout: Timeout in seconds (default: 10.0)
+        default: Default response if timeout/error occurs
+    
+    Returns:
+        User input or default response
+    """
+    
+    print(f"\n{prompt}")
+    
+    # Check if we're in an interactive environment
+    if not sys.stdin.isatty():
+        print(f"⚠️  Non-interactive environment - using default: '{default}'")
+        return default
+    
+    print(f"⏰ You have {timeout} seconds to respond...")
+    
+    # Create a task for input
+    input_task = None
+    
     try:
-        # Start a conversation by sending a message to the assistant
-        assistant_response = await assistant.on_messages(
-            [
-                TextMessage(
-                    content="I need help planning a birthday party. Can you help me?",
-                    source="user",
-                )
-            ],
-            cancellation_token=token,
-        )
-
-        print(f"Assistant: {assistant_response.chat_message.content}")
-
-        # Now get user input through the user proxy
-        user_response = await user_proxy.on_messages(
-            [
-                TextMessage(
-                    content="Please provide your preferences for the birthday party:",
-                    source="assistant",
-                )
-            ],
-            cancellation_token=token,
-        )
-
-        print(f"User: {user_response.chat_message.content}")
-
-    except asyncio.CancelledError:
-        print("⏰ Task was cancelled.")
-    except Exception as e:
-        print(f"❌ Exception occurred: {e}")
-    finally:
-        await model_client.close()
-
-
-async def conditional_user_input_example():
-    """Example where the agent decides when to ask for input"""
-    print("\n🎯 Conditional User Input Example")
-    print("=" * 50)
-
-    # Create model client
-    model_client = OpenAIChatCompletionClient(
-        model="gpt-4",
-        api_key=os.getenv("OPENAI_API_KEY"),
-    )
-
-    # Create an assistant that can decide when to ask for input
-    assistant = AssistantAgent(
-        name="smart_assistant",
-        system_message="""You are a smart assistant. You can:
-        1. Answer simple questions directly
-        2. Ask for more information when needed
-        3. Provide suggestions and ask for preferences
+        def get_input():
+            try:
+                return input("👤 Your response: ")
+            except EOFError:
+                raise EOFError("No input stream available")
         
-        When you need specific information, ask clearly for it.""",
-        model_client=model_client,
-    )
-
-    user_proxy = UserProxyAgent(
-        name="user_proxy", description="A human user who can provide input"
-    )
-
-    token = CancellationToken()
-
-    try:
-        # Start conversation about website creation
-        assistant_response = await assistant.on_messages(
-            [
-                TextMessage(
-                    content="I want to create a website for my business.", source="user"
-                )
-            ],
-            cancellation_token=token,
-        )
-
-        print(f"Assistant: {assistant_response.chat_message.content}")
-
-        # Get user input for website details
-        user_response = await user_proxy.on_messages(
-            [
-                TextMessage(
-                    content="What type of business do you have and what features do you need?",
-                    source="assistant",
-                )
-            ],
-            cancellation_token=token,
-        )
-
-        print(f"User: {user_response.chat_message.content}")
-
-    except asyncio.CancelledError:
-        print("⏰ Task was cancelled.")
+        # Create the input task
+        input_task = asyncio.get_event_loop().run_in_executor(None, get_input)
+        
+        result = await asyncio.wait_for(input_task, timeout=timeout)
+        
+        if result.strip():
+            print(f"✅ Input received: '{result.strip()}'")
+            return result.strip()
+        else:
+            print(f"⚠️  Empty input - using default: '{default}'")
+            return default
+            
+    except asyncio.TimeoutError:
+        print(f"⏰ Timeout ({timeout}s) - using default: '{default}'")
+        # Cancel the input task to prevent hanging
+        if input_task and not input_task.done():
+            input_task.cancel()
+        return default
+    except EOFError:
+        print(f"⚠️  EOF error - using default: '{default}'")
+        return default
+    except KeyboardInterrupt:
+        print(f"⚠️  Interrupted - using default: '{default}'")
+        # Cancel the input task
+        if input_task and not input_task.done():
+            input_task.cancel()
+        return default
     except Exception as e:
-        print(f"❌ Exception occurred: {e}")
-    finally:
-        await model_client.close()
+        print(f"⚠️  Error ({type(e).__name__}): {e} - using default: '{default}'")
+        # Cancel the input task
+        if input_task and not input_task.done():
+            input_task.cancel()
+        return default
 
 
-async def cancellable_user_input_example():
-    """Example with timeout and default response"""
-    print("\n⏰ Cancellable User Input Example")
-    print("=" * 50)
-
-    # Custom input function that returns default response after timeout
-    async def input_with_default(prompt: str, cancellation_token=None) -> str:
-        try:
-            # Use asyncio.wait_for to timeout the input
-            return await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(None, input, prompt),
-                timeout=10.0,  # 10 second timeout
-            )
-        except asyncio.TimeoutError:
-            print("⏰ Timeout reached! Using default response.")
-            return "Default User"  # Default response
-        except Exception as e:
-            print(f"⚠️ Input error: {e}. Using default response.")
-            return "Default User"  # Default response on any error
-
-    user_proxy = UserProxyAgent(
-        name="user_proxy",
-        description="A human user with timeout and default response",
-        input_func=input_with_default,
+async def basic_timeout_test():
+    """Basic timeout functionality test"""
+    print("🧪 Basic Timeout Test")
+    print("=" * 40)
+    
+    response = await safe_input_with_timeout(
+        "What is your name?",
+        timeout=5.0,
+        default="Anonymous User"
     )
+    
+    print(f"🎯 Result: '{response}'")
+    return response
 
+
+async def user_proxy_test():
+    """Test UserProxyAgent with timeout handling"""
+    print("\n🧪 UserProxy with Timeout")
+    print("=" * 40)
+    
+    # Create timeout input function for UserProxy
+    async def timeout_input_func(prompt: str, cancellation_token=None) -> str:
+        return await safe_input_with_timeout(prompt, timeout=8.0, default="Default User")
+    
+    user_proxy = UserProxyAgent(
+        name="timeout_user",
+        description="User with timeout handling",
+        input_func=timeout_input_func
+    )
+    
     token = CancellationToken()
-
+    
     try:
         response = await user_proxy.on_messages(
-            [
-                TextMessage(
-                    content="What is your name? (You have 10 seconds to respond): ",
-                    source="system",
-                )
-            ],
-            cancellation_token=token,
+            [TextMessage(
+                content="What's your favorite programming language?",
+                source="assistant"
+            )],
+            cancellation_token=token
         )
-
-        assert isinstance(response.chat_message, TextMessage)
-        print(f"Response received: {response.chat_message.content}")
-
+        
+        print(f"🎯 UserProxy result: '{response.chat_message.content}'")
+        return response.chat_message.content
+        
     except Exception as e:
-        print(f"❌ Exception occurred: {e}")
-    except BaseException as e:
-        print(f"💥 Unexpected error: {e}")
+        print(f"❌ Error: {e}")
+        return f"Error: {e}"
     finally:
-        # Reset the user proxy agent to clear any internal state
         try:
             await user_proxy.on_reset(cancellation_token=token)
         except Exception as e:
-            print(f"⚠️ Warning: Could not reset user proxy: {e}")
-
-        # Force garbage collection to clean up any remaining references
-        import gc
-
-        gc.collect()
+            print(f"⚠️  Reset warning: {e}")
 
 
-def show_user_input_modes():
-    """Show different user input modes"""
-    print("\n📋 AutoGen User Input Modes")
+async def interactive_chat_example():
+    """Interactive chat with AutoGen agents"""
+    print("\n🧪 Interactive AutoGen Chat")
     print("=" * 40)
+    
+    # Check if OpenAI API key is available
+    if not os.getenv("OPENAI_API_KEY"):
+        print("⚠️  OPENAI_API_KEY not found - running simulation")
+        await chat_simulation()
+        return
+    
+    # Create model client
+    model_client = OpenAIChatCompletionClient(
+        model="gpt-4o",
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
+    
+    # Create user input function with timeout
+    async def robust_user_input(prompt: str, cancellation_token=None) -> str:
+        return await safe_input_with_timeout(
+            prompt, 
+            timeout=15.0, 
+            default="I need help with a general question"
+        )
+    
+    # Create agents
+    assistant = AssistantAgent(
+        name="assistant",
+        model_client=model_client,
+        system_message="You are a helpful assistant. Provide concise, useful responses.",
+    )
+    
+    user_proxy = UserProxyAgent(
+        name="user",
+        description="Human user",
+        input_func=robust_user_input
+    )
+    
+    # Create team
+    termination = TextMentionTermination("GOODBYE")
+    team = SelectorGroupChat(
+        [user_proxy, assistant],
+        termination_condition=termination,
+        max_turns=6,
+    )
+    
+    try:
+        print("\n🚀 Starting chat (type 'GOODBYE' to end)...")
+        
+        response = await Console(
+            team.run_stream(
+                task="Hello! How can I help you today? Feel free to ask me anything."
+            )
+        )
+        
+        print("\n✅ Chat completed!")
+        
+    except Exception as e:
+        print(f"❌ Chat error: {e}")
+    finally:
+        await model_client.close()
 
-    modes = {
-        "Default input_func": "Uses built-in input() function",
-        "Custom input_func": "Provide your own input function",
-        "Async input_func": "Provide async input function for web/UI integration",
-        "Cancellable": "Use CancellationToken for timeout handling",
+
+async def chat_simulation():
+    """Simulate chat without API calls"""
+    print("🎭 Chat Simulation")
+    
+    user_input = await safe_input_with_timeout(
+        "What would you like to ask the assistant?",
+        timeout=10.0,
+        default="Tell me a joke"
+    )
+    
+    # Simulate assistant response
+    responses = {
+        "tell me a joke": "Why don't scientists trust atoms? Because they make up everything! 😄",
+        "what is python": "Python is a high-level programming language known for its simplicity and readability.",
+        "help": "I'm here to help! You can ask me about programming, general knowledge, or anything else.",
     }
+    
+    # Find best match
+    user_lower = user_input.lower()
+    response = "That's an interesting question! I'd be happy to help you explore that topic."
+    
+    for key, value in responses.items():
+        if key in user_lower:
+            response = value
+            break
+    
+    print(f"\n🤖 Assistant: {response}")
+    print("✅ Simulation completed!")
 
-    for mode, description in modes.items():
-        print(f"• {mode}: {description}")
 
-    print("\n💡 Key Features:")
-    print("• UserProxyAgent represents human users")
-    print("• Use CancellationToken for timeout and cancellation")
-    print("• Can integrate with web frameworks (FastAPI, ChainLit)")
-    print("• Supports both sync and async input functions")
+def show_environment_info():
+    """Show current environment information"""
+    print("🔍 Environment Information")
+    print("=" * 40)
+    
+    checks = [
+        ("Interactive stdin", sys.stdin.isatty()),
+        ("Interactive stdout", sys.stdout.isatty()),
+        ("TTY available", os.isatty(0)),
+        ("TERM set", bool(os.environ.get('TERM'))),
+        ("OpenAI API key", bool(os.getenv("OPENAI_API_KEY"))),
+    ]
+    
+    for name, check in checks:
+        status = "✅" if check else "❌"
+        print(f"{status} {name}")
+    
+    if not sys.stdin.isatty():
+        print("\n⚠️  Non-interactive environment detected")
+        print("   Input functions will use default values automatically")
+
+
+def show_usage_examples():
+    """Show usage examples"""
+    print("\n📖 Usage Examples")
+    print("=" * 40)
+    
+    examples = [
+        "# Basic timeout input",
+        'response = await safe_input_with_timeout("Question?", timeout=5.0)',
+        "",
+        "# UserProxy with timeout",
+        "async def my_input(prompt, token=None):",
+        "    return await safe_input_with_timeout(prompt, timeout=10.0)",
+        "",
+        "user_proxy = UserProxyAgent(",
+        '    name="user",',
+        "    input_func=my_input",
+        ")",
+        "",
+        "# Multiple scenarios",
+        "await safe_input_with_timeout('Quick?', timeout=3.0, default='Fast')",
+        "await safe_input_with_timeout('Normal?', timeout=10.0, default='Medium')",
+        "await safe_input_with_timeout('Slow?', timeout=30.0, default='Patient')",
+    ]
+    
+    for example in examples:
+        print(f"  {example}")
 
 
 async def main():
-    """Main function"""
-    print("Choose an example:")
-    print("1. Simple user input")
-    print("2. Conditional user input")
-    print("3. Cancellable user input (with timeout)")
-    print("4. Show user input modes")
+    """Main function with interactive menu"""
+    print("🎯 AutoGen User Input with Timeout")
+    print("=" * 50)
+    
+    # Show environment info
+    show_environment_info()
+    
+    # Interactive menu
+    choice = await safe_input_with_timeout(
+        """
+Choose an example:
+1. Basic timeout test
+2. UserProxy with timeout
+3. Interactive AutoGen chat
+4. Show usage examples
+5. Exit
 
-    choice = input("\nEnter choice (1-4): ").strip()
-
+Enter choice (1-5):""",
+        timeout=10.0,
+        default="1"
+    )
+    
     try:
         if choice == "1":
-            await simple_user_input_example()
+            await basic_timeout_test()
         elif choice == "2":
-            await conditional_user_input_example()
+            await user_proxy_test()
         elif choice == "3":
-            await cancellable_user_input_example()
+            await interactive_chat_example()
         elif choice == "4":
-            show_user_input_modes()
+            show_usage_examples()
+        elif choice == "5":
+            print("👋 Goodbye!")
         else:
-            print("❌ Invalid choice")
+            print(f"❌ Invalid choice: '{choice}' - running basic test")
+            await basic_timeout_test()
+            
+    except KeyboardInterrupt:
+        print("\n🛑 Program interrupted")
     except Exception as e:
-        print(f"❌ Error in main: {e}")
+        print(f"\n💥 Error: {type(e).__name__}: {e}")
     finally:
-        # Force cleanup of all remaining tasks
-        print("\n🧹 Final cleanup...")
-
-        # Cancel all remaining tasks
-        tasks = [
-            task for task in asyncio.all_tasks() if task is not asyncio.current_task()
-        ]
-        for task in tasks:
-            task.cancel()
-
-        if tasks:
-            try:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            except Exception as e:
-                print(f"⚠️ Cleanup warning: {e}")
-
-        # Force garbage collection
-        import gc
-
-        gc.collect()
-
-        print("✅ Cleanup complete!")
+        print("\n✅ Program completed!")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Program interrupted by user")
     except Exception as e:
-        print(f"\n💥 Fatal error: {e}")
+        print(f"💥 Fatal error: {e}")
     finally:
-        # Force exit to ensure program terminates
-        import sys
-
-        print("🚪 Exiting program...")
+        print("🚪 Exiting...")
         sys.exit(0)
