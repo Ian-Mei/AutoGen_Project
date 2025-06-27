@@ -18,7 +18,7 @@ __pycache__/
 .idea/
 *.swp
 *.swo
-
+.cursor/
 # OS files
 .DS_Store
 Thumbs.db

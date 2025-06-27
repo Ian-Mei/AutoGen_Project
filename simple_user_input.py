@@ -231,17 +231,54 @@ async def main():
 
     choice = input("\nEnter choice (1-4): ").strip()
 
-    if choice == "1":
-        await simple_user_input_example()
-    elif choice == "2":
-        await conditional_user_input_example()
-    elif choice == "3":
-        await cancellable_user_input_example()
-    elif choice == "4":
-        show_user_input_modes()
-    else:
-        print("❌ Invalid choice")
+    try:
+        if choice == "1":
+            await simple_user_input_example()
+        elif choice == "2":
+            await conditional_user_input_example()
+        elif choice == "3":
+            await cancellable_user_input_example()
+        elif choice == "4":
+            show_user_input_modes()
+        else:
+            print("❌ Invalid choice")
+    except Exception as e:
+        print(f"❌ Error in main: {e}")
+    finally:
+        # Force cleanup of all remaining tasks
+        print("\n🧹 Final cleanup...")
+
+        # Cancel all remaining tasks
+        tasks = [
+            task for task in asyncio.all_tasks() if task is not asyncio.current_task()
+        ]
+        for task in tasks:
+            task.cancel()
+
+        if tasks:
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                print(f"⚠️ Cleanup warning: {e}")
+
+        # Force garbage collection
+        import gc
+
+        gc.collect()
+
+        print("✅ Cleanup complete!")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n🛑 Program interrupted by user")
+    except Exception as e:
+        print(f"\n💥 Fatal error: {e}")
+    finally:
+        # Force exit to ensure program terminates
+        import sys
+
+        print("🚪 Exiting program...")
+        sys.exit(0)
