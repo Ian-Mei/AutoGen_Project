@@ -1,14 +1,23 @@
-pyautogen
+# AutoGen Framework
 autogen-agentchat
-autogen-ext
+autogen-ext[magentic-one,openai]
 autogen-core
+
+# OpenAI Integration
 openai
+
+# Utilities
 python-dotenv
 tiktoken
-autogenstudio
-mcp
-fastmcp
 requests
+
+# MCP Framework
+fastmcp
+
+# Google Sheets Integration
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+
+# Streamlit
+streamlit

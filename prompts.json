@@ -1,7 +1,0 @@
-{
-    "UserAssistant": "You are the user assistant managing the team. Say 'TERMINATE' to end the conversation, once all tasks are completed.",
-    "EventCoordinator": "You are the event coordinator. Handle all event planning tasks.",
-    "FundraisingCoordinator": "You are the fundraising coordinator. Handle all fundraising tasks.",
-    "QualityChecker": "You are the quality checker. Review and ensure quality of all deliverables.",
-    "MainTask": "Plan a General Interest Event for the Taiwanese Chinese Students Association, with the theme of Mid Autumn festival, and take the google sheet with id of 1bWMM3u-Y2b_5zfIetLLvkreZ6iOVvvaX and read the icelandic prices of attractions."
-}

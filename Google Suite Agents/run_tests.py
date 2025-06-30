@@ -11,12 +11,13 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), "tests"))
 
 if __name__ == "__main__":
-    # Import and run the main test runner
-    from run_tests import main
+    # Import and run the main test runner from tests directory
+    # Since we added tests to sys.path, we can import directly
+    import run_tests as test_runner
     import asyncio
 
     try:
-        asyncio.run(main())
+        asyncio.run(test_runner.main())
     except KeyboardInterrupt:
         print("\n\n⚠️  Test interrupted by user")
     except Exception as e:

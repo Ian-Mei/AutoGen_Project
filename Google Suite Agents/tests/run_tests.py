@@ -8,8 +8,12 @@ import asyncio
 import sys
 import os
 
-# Add parent directory to path to import mcp_client
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent directories to path to import modules
+# Current structure: AutoGen_Project/Google Suite Agents/tests/run_tests.py
+# Need to go up two levels to get to AutoGen_Project, then into Google Suite Agents
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)  # Google Suite Agents directory
+sys.path.append(parent_dir)
 
 
 async def run_test_suite(test_file: str, test_name: str):

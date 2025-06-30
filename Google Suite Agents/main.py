@@ -1,23 +1,52 @@
+#!/usr/bin/env python3
+"""
+AutoGen Multi-Agent Event Planning System
+
+This system creates specialized agents for different aspects of event planning:
+- User Assistant: Manages user interactions and coordination
+- Sheets Explorer: Handles Google Sheets data retrieval
+- Event Coordinator: Plans events and manages logistics
+- Fundraising Coordinator: Handles fundraising and budgeting
+- Quality Checker: Ensures quality assurance across deliverables
+
+The agents work together using a SelectorGroupChat to coordinate tasks
+and share information through FastMCP tools integration.
+"""
+
+import asyncio
+import json
+import os
+from typing import List, Dict, Any
+
+# Third-party imports
+from dotenv import load_dotenv
+
+# AutoGen imports
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.ui import Console
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_agentchat.conditions import TextMentionTermination
+from autogen_agentchat.conditions import TextMentionTermination, MaxMessageTermination
 from autogen_ext.models.openai import OpenAIChatCompletionClient
-import asyncio
-from dotenv import load_dotenv
-import os
-import json
-import subprocess
-import time
-from typing import List, Dict, Any
+
+# Local imports
 from fastmcp import FastMCP
 
-load_dotenv()
+# Load environment variables from current directory or parent directory
+if os.path.exists(".env"):
+    load_dotenv(".env")
+elif os.path.exists("../.env"):
+    load_dotenv("../.env")
+else:
+    # No .env file found, rely on system environment variables
+    pass
+
+# Initialize OpenAI client
 model_client = OpenAIChatCompletionClient(
     model="gpt-4o",
     api_key=os.getenv("OPENAI_API_KEY"),
 )
 
+# Load agent prompts
 with open("prompts.json", "r", encoding="utf-8") as pf:
     prompts = json.load(pf)
 
@@ -26,47 +55,73 @@ with open("prompts.json", "r", encoding="utf-8") as pf:
 agent_configs = {
     "user_assistant": {
         "allowed_domains": ["ask_user_input"],  # Only user input tool
-        "system_message": prompts["UserAssistant"],
+        "system_message": prompts["user_assistant"],
+    },
+    "sheets_explorer": {
+        "allowed_domains": ["sheets_"],  # Only sheets-related tools
+        "system_message": prompts["sheets_explorer"],
     },
     "event_coordinator": {
         "allowed_domains": ["event_"],  # Only event-related tools
-        "system_message": prompts["EventCoordinator"],
+        "system_message": prompts["event_coordinator"],
     },
     "fundraising_coordinator": {
         "allowed_domains": ["fundraising_"],  # Only fundraising-related tools
-        "system_message": prompts["FundraisingCoordinator"],
+        "system_message": prompts["fundraising_coordinator"],
     },
     "quality_checker": {
         "allowed_domains": ["quality_"],  # Only quality-related tools
-        "system_message": prompts["QualityChecker"],
+        "system_message": prompts["quality_checker"],
     },
 }
 
 
-async def get_tools_from_fastmcp_server() -> List[Dict[str, Any]]:
+async def get_tools_from_fastmcp_server() -> List[Any]:
     """Import tools directly from FastMCP server module"""
     try:
         # Import the FastMCP server instance from fastmcp_server.py
         import fastmcp_server
+
         mcp_instance = fastmcp_server.mcp
-        
-        # Get tools from the FastMCP instance
-        tools = mcp_instance.get_tools()
-        print(f"📋 Retrieved {len(tools)} tools from FastMCP server")
-        return tools
+
+        # Get tools from the FastMCP instance (returns a dict)
+        tools_dict = await mcp_instance.get_tools()
+
+        # Convert to list of callable functions for AutoGen
+        tools_list = []
+        for tool_name, tool_obj in tools_dict.items():
+            # Get the actual function from the FastMCP FunctionTool
+            try:
+                # Access the actual function via the 'fn' attribute
+                actual_func = tool_obj.fn
+                tools_list.append(actual_func)
+            except Exception as e:
+                print(f"⚠️  Could not get function for {tool_name}: {e}")
+                continue
+
+        print(f"📋 Retrieved {len(tools_list)} callable tools from FastMCP server")
+        for tool in tools_list[:5]:
+            print(f"  - {tool.__name__}")
+        if len(tools_list) > 5:
+            print(f"  ... and {len(tools_list) - 5} more tools")
+
+        return tools_list
     except Exception as e:
         print(f"❌ Error importing FastMCP tools: {e}")
+        import traceback
+
+        traceback.print_exc()
         return []
 
 
-def filter_tools_by_domain(tools: List[Dict], allowed_domains: List[str]) -> List[Dict]:
+def filter_tools_by_domain(tools: List[Any], allowed_domains: List[str]) -> List[Any]:
     """Filter tools based on allowed domains"""
     if not allowed_domains:
         return []
-    
+
     filtered_tools = []
     for tool in tools:
-        tool_name = tool.get("function", {}).get("name", "")
+        tool_name = getattr(tool, "__name__", "")
         for domain in allowed_domains:
             if domain.endswith("_"):
                 # Underscore pattern matching (e.g., "event_")
@@ -77,17 +132,8 @@ def filter_tools_by_domain(tools: List[Dict], allowed_domains: List[str]) -> Lis
                 # Exact match
                 filtered_tools.append(tool)
                 break
-    
+
     return filtered_tools
-
-
-async def simple_user_input(prompt: str, cancellation_token=None) -> str:
-    """Simple input without timeout - cleaner for main system"""
-    print(f"\n{prompt}")
-    try:
-        return input("👤 Your response: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return "TERMINATE"
 
 
 async def create_agents_with_dynamic_tools():
@@ -125,16 +171,38 @@ async def main() -> None:
         agents = await create_agents_with_dynamic_tools()
 
         # Create team with dynamically created agents
-        termination = TextMentionTermination("TERMINATE")
+        text_mention_termination = TextMentionTermination("TERMINATE")
+        max_messages_termination = MaxMessageTermination(max_messages=25)
+        termination = text_mention_termination | max_messages_termination
+
+        participants = [agent.name for agent in agents.values()]
+
+        selector_prompt = """
+            
+            {roles}
+
+            Current conversation context:
+            {history}
+
+            Read the above conversation, then select an agent from {participants} to perform the next task.
+            Make sure the planner agent has assigned tasks before other agents start working. If the task has been fufilled, tell the next agent to say 'TERMINATE' to end the conversation.
+            Only select one agent.
+        """
+        # Create roles dictionary without MainTask
+        roles = {k: v for k, v in prompts.items() if k != "MainTask"}
+
         team = SelectorGroupChat(
             [
                 agents["user_assistant"],
+                agents["sheets_explorer"],
                 agents["event_coordinator"],
                 agents["fundraising_coordinator"],
                 agents["quality_checker"],
             ],
+            model_client=model_client,
             termination_condition=termination,
-            max_turns=25,
+            selector_prompt=selector_prompt,
+            allow_repeated_speaker=True,
         )
 
         # Show streaming output in the console
@@ -156,7 +224,7 @@ async def main() -> None:
 
         with open("output.txt", "w", encoding="utf-8") as f:
             f.writelines(lines)
-    
+
     finally:
         # Cleanup resources
         await model_client.close()
